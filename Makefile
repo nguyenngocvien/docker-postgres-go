@@ -13,7 +13,19 @@ migrateup:
 migratedown:
 	migrate -path db/migration -database "postgresql://root:123456@localhost:5432/simplebank?sslmode=disable" -verbose down
 
+migrateup1:
+	migrate -path db/migration -database "postgresql://root:123456@localhost:5432/simplebank?sslmode=disable" -verbose up 1
+
+migratedown1:
+	migrate -path db/migration -database "postgresql://root:123456@localhost:5432/simplebank?sslmode=disable" -verbose down 1
+
 sqlc:
 	docker run --rm -v ".:/src" -w /src sqlc/sqlc generate
+	
+server:
+	go run main.go
 
-.PHONY: postgres createdb dropdb migrateup migratedown sqlc
+mock:
+	mockgen -package mockdb -destination db/mock/store.go github.com/viennn/docker-postgres-go/db/sqlc Store
+
+.PHONY: postgres createdb dropdb migrateup migratedown sqlc server mock
