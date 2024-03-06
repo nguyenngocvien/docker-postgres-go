@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+pacakge pb;
+
+import "rpc_create_user.proto";
+import "rpc_login_user.proto";
+
+option go_package = "github.com/viennn/docker-postgres-go/pb";
+
+service SimpleBank {
+    rpc CreateUser (CreateUserRequest) return (CreateUserResponse);
+    rpc LoginUser (LoginUserRequest) return (LoginUserResponse);
+}

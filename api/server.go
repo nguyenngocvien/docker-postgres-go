@@ -9,16 +9,18 @@ import (
 	db "github.com/viennn/docker-postgres-go/db/sqlc"
 	"github.com/viennn/docker-postgres-go/token"
 	"github.com/viennn/docker-postgres-go/util"
+	"github.com/viennn/docker-postgres-go/worker"
 )
 
 type Server struct {
-	config     util.Config
-	store      db.Store
-	tokenMaker token.Maker
-	router     *gin.Engine
+	config          util.Config
+	store           db.Store
+	tokenMaker      token.Maker
+	router          *gin.Engine
+	taskDistributor worker.TaskDistributor
 }
 
-func NewServer(config util.Config, store db.Store) (*Server, error) {
+func NewServer(config util.Config, store db.Store, taskDistributor worker.TaskDistributor) (*Server, error) {
 	tokenMaker, err := token.NewJWTmaker(config.TokenSymmetricKey)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create token maker: %w", err)
@@ -28,6 +30,7 @@ func NewServer(config util.Config, store db.Store) (*Server, error) {
 		config:     config,
 		store:      store,
 		tokenMaker: tokenMaker,
+		taskDistributor: taskDistributor,
 	}
 
 	if v, ok := binding.Validator.Engine().(*validator.Validate); ok {
@@ -43,6 +46,7 @@ func (server *Server) setupRouter() {
 	router := gin.Default()
 	router.POST("/users", server.createUser)
 	router.POST("/users/login", server.loginUser)
+	router.POST("/tokens/renew_access", server.renewAccessToken)
 
 	authRoutes := router.Group("/").Use(authMiddleware(server.tokenMaker))
 	authRoutes.POST("/accounts", server.createAccount)
