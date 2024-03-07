@@ -1,10 +1,11 @@
 package main
 
 import (
-	"database/sql"
+	"context"
 
 	"github.com/golang-migrate/migrate"
 	"github.com/hibiken/asynq"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog/log"
 	"github.com/viennn/docker-postgres-go/api"
 	db "github.com/viennn/docker-postgres-go/db/sqlc"
@@ -24,14 +25,14 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("Cannot load config")
 	}
-	conn, err := sql.Open(config.DBDriver, config.DBSource)
+	connPool, err := pgxpool.New(context.Background(), config.DBSource)
 	if err != nil {
 		log.Fatal().Err(err).Msg("cannot connect to db")
 	}
 
 	runDBMigration(config.MigrationURL, config.DBSource)
 
-	store := db.NewStore(conn)
+	store := db.NewStore(connPool)
 
 	redisOpt := asynq.RedisClientOpt{
 		Addr: config.RedisAddress,
