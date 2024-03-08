@@ -2,30 +2,43 @@ package main
 
 import (
 	"context"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/golang-migrate/migrate"
 	"github.com/hibiken/asynq"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"github.com/viennn/docker-postgres-go/api"
-	db "github.com/viennn/docker-postgres-go/db/sqlc"
-	"github.com/viennn/docker-postgres-go/mail"
-	"github.com/viennn/docker-postgres-go/util"
-	"github.com/viennn/docker-postgres-go/worker"
+	"github.com/viennn/docker-postgres-go/app/api"
+	db "github.com/viennn/docker-postgres-go/app/db/sqlc"
+	"github.com/viennn/docker-postgres-go/app/mail"
+	"github.com/viennn/docker-postgres-go/app/util"
+	"github.com/viennn/docker-postgres-go/app/worker"
+	"golang.org/x/sync/errgroup"
 )
 
-const (
-	dbDriver      = "postgres"
-	dbSource      = "postgresql://root:123456@localhost:5432/simplebank?sslmode=disable"
-	serverAddress = "0.0.0.0:8080"
-)
+var interruptSignal = []os.Signal{
+	os.Interrupt,
+    syscall.SIGTERM,
+	syscall.SIGINT,
+}
 
 func main() {
 	config, err := util.LoadConfig(".")
 	if err != nil {
 		log.Fatal().Err(err).Msg("Cannot load config")
 	}
-	connPool, err := pgxpool.New(context.Background(), config.DBSource)
+
+	if config.Environment == "development" {
+		log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), interruptSignal...)
+	defer stop()
+
+	connPool, err := pgxpool.New(ctx, config.DBSource)
 	if err != nil {
 		log.Fatal().Err(err).Msg("cannot connect to db")
 	}
@@ -38,18 +51,17 @@ func main() {
 		Addr: config.RedisAddress,
 	}
 
-	taskDistributor := worker.NewRedisTaskDistributor(redisOpt)
-	go runTaskProcessor(redisOpt, store, config)
+	// taskDistributor := worker.NewRedisTaskDistributor(redisOpt)
 
-	server, err := api.NewServer(config, store, taskDistributor)
-	if err != nil {
-		log.Fatal().Err(err).Msg("cannot create server")
-	}
+	waitGroup, ctx := errgroup.WithContext(ctx)
 
-	err = server.Start(config.ServerAddress)
-	if err != nil {
-		log.Fatal().Err(err).Msg("cannot start server")
-	}
+	runTaskProcessor(ctx, waitGroup, *config, redisOpt, store)
+	runGinServer(*config, store)
+
+	err = waitGroup.Wait()
+	if err!= nil {
+        log.Fatal().Err(err).Msg("error from wait group")
+    }
 }
 
 func runDBMigration(migrateURL string, dbSource string) {
@@ -65,13 +77,36 @@ func runDBMigration(migrateURL string, dbSource string) {
 	log.Info().Msg("db migrated successfully")
 }
 
-func runTaskProcessor(redisOpt asynq.RedisClientOpt, db db.Store, config util.Config) {
+func runTaskProcessor(ctx context.Context, waitGroup *errgroup.Group,config util.Config, redisOpt asynq.RedisClientOpt, db db.Store) {
 	mailer := mail.NewGmailSender(config.EmailSenderName, config.EmailSenderAddress, config.EmailSenderPassword)
 	taskProcessor := worker.NewRedisTaskProcessor(redisOpt, db, mailer)
-	log.Info().Msg("Running task processor")
+	
+	log.Info().Msg("start task processor")
 
 	err := taskProcessor.Start()
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to start task processor")
 	}
+
+	waitGroup.Go(func() error {
+		<-ctx.Done()
+		log.Info().Msg("graceful shutdown task processor")
+
+		taskProcessor.Shutdown()
+		log.Info().Msg("task processor is stopped")
+
+		return nil
+	})
+}
+
+func runGinServer(config util.Config, store db.Store){
+	server, err := api.NewServer(config, store)
+    if err!= nil {
+        log.Fatal().Err(err).Msg("cannot create server")
+    }
+
+    err = server.Start(config.HTTPServerAddress)
+    if err!= nil {
+        log.Fatal().Err(err).Msg("cannot start server")
+    }
 }
